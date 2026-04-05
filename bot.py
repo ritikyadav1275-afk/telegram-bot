@@ -12,7 +12,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 # 🔐 Token from Render ENV
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# 🌐 Flask server (keep alive for Render)
+# 🌐 Flask server (keep alive)
 app_web = Flask(__name__)
 
 @app_web.route('/')
@@ -55,6 +55,8 @@ async def save(update: Update, context: ContextTypes.DEFAULT_TYPE):
         link = f"https://t.me/{bot_username}?start={code}"
 
         await msg.reply_text(f"🔗 Your link:\n{link}")
+    else:
+        await msg.reply_text("❌ Send only photo/video/document")
 
 # 🚀 Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -70,7 +72,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             async def delete_later():
                 await asyncio.sleep(300)
                 try:
-                    await context.bot.delete_message(chat_id=update.message.chat_id, message_id=sent.message_id)
+                    await context.bot.delete_message(
+                        chat_id=update.message.chat_id,
+                        message_id=sent.message_id
+                    )
                 except:
                     pass
 
@@ -78,13 +83,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Invalid or expired link")
     else:
-        await update.message.reply_text("👋 Send me a file to get a private link")
+        await update.message.reply_text("👋 Send me a file to get private link")
 
 # 🤖 Run bot
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-app.add_handler(MessageHandler(filters.ALL, save))
+# ✅ IMPORTANT ORDER FIX
 app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO | filters.VIDEO, save))
 
 print("Bot running...")
 app.run_polling()
