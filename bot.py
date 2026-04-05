@@ -8,7 +8,7 @@ from threading import Thread
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 
-BOT_TOKEN = os.getenv("8185766502:AAGScTQ8pfmU6-It26nmOod-bhs8rQqkQSg")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # 🌐 Web server (for uptime)
 app_web = Flask('')
