@@ -90,7 +90,7 @@ app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 # ✅ IMPORTANT ORDER FIX
 app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO | filters.VIDEO, save))
+app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, save))
 
 print("Bot running...")
 app.run_polling()
