@@ -1,3 +1,5 @@
+import sys
+print(sys.version)
 import random
 import string
 import asyncio
