@@ -1,2 +1,2 @@
-python-telegram-bot
-flask
+Key: MONGO_URL
+Value: mongodb+srv://ritik:YOURPASSWORD@master.skkcgfw.mongodb.net/?retryWrites=true&w=majority&appName=Master
