@@ -2,11 +2,9 @@ import os
 import random
 import string
 import asyncio
-import sqlite3
 from flask import Flask
 from threading import Thread
 from telegram import Update
-from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -14,14 +12,20 @@ from telegram.ext import (
     filters,
     ContextTypes
 )
+from telegram.error import BadRequest
+from pymongo import MongoClient
 
+# ===== CONFIG =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.environ.get("PORT", 10000))
+MONGO_URL = os.getenv("MONGO_URL")
 
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN not set")
+# ===== MONGODB =====
+client = MongoClient(MONGO_URL)
+db = client["telegram_bot"]
+collection = db["files"]
 
-# -------- Flask --------
+# ===== FLASK =====
 app_web = Flask(__name__)
 
 @app_web.route('/')
@@ -31,24 +35,11 @@ def home():
 def run_web():
     app_web.run(host='0.0.0.0', port=PORT)
 
-# -------- Database --------
-conn = sqlite3.connect("files.db", check_same_thread=False)
-cursor = conn.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS files (
-    code TEXT PRIMARY KEY,
-    file_id TEXT,
-    file_type TEXT
-)
-""")
-conn.commit()
-
-# -------- Utils --------
+# ===== UTILITY =====
 def gen_code():
     return ''.join(random.choices(string.ascii_letters + string.digits, k=8))
 
-# -------- Delete --------
+# ===== DELETE MESSAGE AFTER 5 MIN =====
 async def delete_later(bot, chat_id, message_id):
     await asyncio.sleep(300)
     try:
@@ -58,9 +49,11 @@ async def delete_later(bot, chat_id, message_id):
     except Exception as e:
         print(e)
 
-# -------- Save file --------
+# ===== SAVE FILE =====
 async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+    file_id = None
+    file_type = None
 
     if msg.photo:
         file_id = msg.photo[-1].file_id
@@ -76,59 +69,63 @@ async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     code = gen_code()
 
-    cursor.execute(
-        "INSERT INTO files (code, file_id, file_type) VALUES (?, ?, ?)",
-        (code, file_id, file_type)
-    )
-    conn.commit()
+    # SAVE IN DATABASE (PERMANENT)
+    collection.insert_one({
+        "code": code,
+        "file_id": file_id,
+        "type": file_type
+    })
 
-    bot = await context.bot.get_me()
-    link = f"https://t.me/{bot.username}?start={code}"
+    bot_info = await context.bot.get_me()
+    link = f"https://t.me/{bot_info.username}?start={code}"
 
-    await msg.reply_text(f"Link:\n{link}")
+    await msg.reply_text(f"🔗 Link:\n{link}")
 
-# -------- Start --------
+# ===== START =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Send file to get link")
-        return
+    if context.args:
+        code = context.args[0]
 
-    code = context.args[0]
+        data = collection.find_one({"code": code})
 
-    cursor.execute("SELECT file_id, file_type FROM files WHERE code=?", (code,))
-    result = cursor.fetchone()
+        if data:
+            file_id = data["file_id"]
+            file_type = data["type"]
 
-    if not result:
-        await update.message.reply_text("Invalid link")
-        return
+            await update.message.reply_text("⚠️ This file will delete in 5 minutes")
 
-    file_id, file_type = result
+            try:
+                if file_type == "photo":
+                    sent = await context.bot.send_photo(update.effective_chat.id, file_id)
+                elif file_type == "video":
+                    sent = await context.bot.send_video(update.effective_chat.id, file_id)
+                else:
+                    sent = await context.bot.send_document(update.effective_chat.id, file_id)
+            except Exception:
+                await update.message.reply_text("❌ File too large or error")
+                return
 
-    try:
-        if file_type == "photo":
-            sent = await context.bot.send_photo(update.effective_chat.id, file_id)
-        elif file_type == "video":
-            sent = await context.bot.send_video(update.effective_chat.id, file_id)
+            asyncio.create_task(
+                delete_later(context.bot, update.effective_chat.id, sent.message_id)
+            )
+
         else:
-            sent = await context.bot.send_document(update.effective_chat.id, file_id)
-    except Exception:
-        await update.message.reply_text("Failed to send file")
-        return
+            await update.message.reply_text("❌ Invalid link")
 
-    # Delete after 5 minutes
-    asyncio.create_task(
-        delete_later(context.bot, update.effective_chat.id, sent.message_id)
-    )
+    else:
+        await update.message.reply_text("Send file to get link")
 
-# -------- Main --------
+# ===== MAIN =====
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
-        save_file
-    ))
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
+            save_file
+        )
+    )
 
     Thread(target=run_web, daemon=True).start()
 
