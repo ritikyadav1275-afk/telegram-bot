@@ -1,2 +1,4 @@
-Key: MONGO_URL
-Value: mongodb+srv://ritik:YOURPASSWORD@master.skkcgfw.mongodb.net/?retryWrites=true&w=majority&appName=Master
+python-telegram-bot==20.7
+Flask==2.3.3
+httpx==0.25.2
+pymongo[srv]
