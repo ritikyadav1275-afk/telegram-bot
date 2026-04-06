@@ -12,34 +12,34 @@ from telegram.ext import (
     filters,
     ContextTypes
 )
-from telegram.error import BadRequest
 from pymongo import MongoClient
+from telegram.error import BadRequest
 
-# ===== CONFIG =====
+# -------- ENV --------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-PORT = int(os.environ.get("PORT", 10000))
 MONGO_URL = os.getenv("MONGO_URL")
+PORT = int(os.environ.get("PORT", 10000))
 
-# ===== MONGODB =====
+# -------- MongoDB --------
 client = MongoClient(MONGO_URL)
 db = client["telegram_bot"]
 collection = db["files"]
 
-# ===== FLASK =====
+# -------- Flask --------
 app_web = Flask(__name__)
 
 @app_web.route('/')
 def home():
-    return "Bot is running"
+    return "Bot running"
 
 def run_web():
     app_web.run(host='0.0.0.0', port=PORT)
 
-# ===== UTILITY =====
+# -------- Utils --------
 def gen_code():
     return ''.join(random.choices(string.ascii_letters + string.digits, k=8))
 
-# ===== DELETE MESSAGE AFTER 5 MIN =====
+# -------- Delete after 5 min --------
 async def delete_later(bot, chat_id, message_id):
     await asyncio.sleep(300)
     try:
@@ -49,7 +49,7 @@ async def delete_later(bot, chat_id, message_id):
     except Exception as e:
         print(e)
 
-# ===== SAVE FILE =====
+# -------- Save File --------
 async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     file_id = None
@@ -69,7 +69,6 @@ async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     code = gen_code()
 
-    # SAVE IN DATABASE (PERMANENT)
     collection.insert_one({
         "code": code,
         "file_id": file_id,
@@ -81,55 +80,62 @@ async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await msg.reply_text(f"🔗 Link:\n{link}")
 
-# ===== START =====
+# -------- Start --------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         code = context.args[0]
 
         data = collection.find_one({"code": code})
 
-        if data:
-            file_id = data["file_id"]
-            file_type = data["type"]
-
-            await update.message.reply_text("⚠️ This file will delete in 5 minutes")
-
-            try:
-                if file_type == "photo":
-                    sent = await context.bot.send_photo(update.effective_chat.id, file_id)
-                elif file_type == "video":
-                    sent = await context.bot.send_video(update.effective_chat.id, file_id)
-                else:
-                    sent = await context.bot.send_document(update.effective_chat.id, file_id)
-            except Exception:
-                await update.message.reply_text("❌ File too large or error")
-                return
-
-            asyncio.create_task(
-                delete_later(context.bot, update.effective_chat.id, sent.message_id)
-            )
-
-        else:
+        if not data:
             await update.message.reply_text("❌ Invalid link")
+            return
+
+        file_id = data["file_id"]
+        file_type = data["type"]
+
+        await update.message.reply_text("⏳ This file will delete in 5 minutes")
+
+        try:
+            if file_type == "photo":
+                sent = await context.bot.send_photo(update.effective_chat.id, file_id)
+            elif file_type == "video":
+                sent = await context.bot.send_video(update.effective_chat.id, file_id)
+            else:
+                sent = await context.bot.send_document(update.effective_chat.id, file_id)
+        except Exception as e:
+            print(e)
+            await update.message.reply_text("❌ Failed to send file")
+            return
+
+        asyncio.create_task(
+            delete_later(context.bot, update.effective_chat.id, sent.message_id)
+        )
 
     else:
-        await update.message.reply_text("Send file to get link")
+        await update.message.reply_text("👋 Send me a file to get link")
 
-# ===== MAIN =====
+# -------- Main --------
 def main():
+    if not BOT_TOKEN:
+        print("BOT_TOKEN missing")
+        return
+
+    if not MONGO_URL:
+        print("MONGO_URL missing")
+        return
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(
-        MessageHandler(
-            filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
-            save_file
-        )
-    )
+    app.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
+        save_file
+    ))
 
     Thread(target=run_web, daemon=True).start()
 
-    print("Bot running...")
+    print("Bot started...")
     app.run_polling()
 
 if __name__ == "__main__":
