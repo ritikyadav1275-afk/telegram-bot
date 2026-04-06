@@ -69,7 +69,7 @@ def main():
     bot_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, save_file))
     
     Thread(target=run_web, daemon=True).start()
-    bot_app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
