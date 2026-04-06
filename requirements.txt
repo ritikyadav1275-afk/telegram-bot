@@ -1,5 +1,5 @@
-python-telegram-bot==20.8
-flask==2.3.3
-pymongo[srv]==4.6.1
-dnspython==2.6.1
-httpx==0.25.2
+python-telegram-bot
+flask
+pymongo[srv]
+httpx
+dnspython
