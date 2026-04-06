@@ -43,14 +43,17 @@ async def delete_later(bot, chat_id, message_id):
     await asyncio.sleep(300)
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except BadRequest:
+    except:
         pass
-    except Exception as e:
-        print(e)
+
+# -------- TEMP STORAGE (for batch) --------
+user_files = {}
 
 # -------- Save File --------
 async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+    user_id = update.effective_user.id
+
     file_id = None
     file_type = None
 
@@ -66,27 +69,42 @@ async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         return
 
-    code = gen_code()
+    if user_id not in user_files:
+        user_files[user_id] = []
 
-    collection.insert_one({
-        "code": code,
+    user_files[user_id].append({
         "file_id": file_id,
         "type": file_type
     })
 
-    print("Saved:", code)  # ✅ DEBUG
+    await msg.reply_text("✅ File added! Send more or type /done")
+
+# -------- DONE (Generate Batch Link) --------
+async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if user_id not in user_files or not user_files[user_id]:
+        await update.message.reply_text("❌ No files added")
+        return
+
+    code = gen_code()
+
+    collection.insert_one({
+        "code": code,
+        "files": user_files[user_id]
+    })
+
+    user_files[user_id] = []
 
     bot_info = await context.bot.get_me()
     link = f"https://t.me/{bot_info.username}?start={code}"
 
-    await msg.reply_text(f"🔗 Link:\n{link}")
+    await update.message.reply_text(f"🔗 Batch Link:\n{link}")
 
-# -------- Start --------
+# -------- START --------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         code = context.args[0]
-
-        print("Searching:", code)  # ✅ DEBUG
 
         data = collection.find_one({"code": code})
 
@@ -94,30 +112,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Invalid link")
             return
 
-        file_id = data["file_id"]
-        file_type = data["type"]
+        await update.message.reply_text("⏳ Files will delete in 5 minutes")
 
-        await update.message.reply_text("⏳ This file will delete in 5 minutes")
+        # MULTIPLE FILES
+        if "files" in data:
+            for file in data["files"]:
+                try:
+                    if file["type"] == "photo":
+                        sent = await context.bot.send_photo(update.effective_chat.id, file["file_id"])
+                    elif file["type"] == "video":
+                        sent = await context.bot.send_video(update.effective_chat.id, file["file_id"])
+                    else:
+                        sent = await context.bot.send_document(update.effective_chat.id, file["file_id"])
 
-        try:
-            if file_type == "photo":
-                sent = await context.bot.send_photo(update.effective_chat.id, file_id)
-            elif file_type == "video":
-                sent = await context.bot.send_video(update.effective_chat.id, file_id)
-            else:
-                sent = await context.bot.send_document(update.effective_chat.id, file_id)
+                    asyncio.create_task(
+                        delete_later(context.bot, update.effective_chat.id, sent.message_id)
+                    )
 
-            asyncio.create_task(
-                delete_later(context.bot, update.effective_chat.id, sent.message_id)
-            )
+                except Exception as e:
+                    print(e)
 
-        except Exception as e:
-            print(e)
-            await update.message.reply_text("❌ Failed to send file")
+        else:
+            await update.message.reply_text("❌ No files found")
+
     else:
-        await update.message.reply_text("👋 Send a file to get a link!")
+        await update.message.reply_text("👋 Send files then type /done")
 
-# -------- Main --------
+# -------- MAIN --------
 def main():
     if not BOT_TOKEN:
         print("BOT_TOKEN missing")
@@ -130,6 +151,8 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("done", done))
+
     app.add_handler(MessageHandler(
         filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
         save_file
