@@ -2,6 +2,7 @@ import os
 import random
 import string
 import asyncio
+import logging
 from flask import Flask
 from threading import Thread
 from telegram import Update
@@ -15,6 +16,13 @@ from telegram.ext import (
 from pymongo import MongoClient
 from telegram.error import BadRequest
 
+# -------- LOGGING --------
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 # -------- ENV --------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
@@ -25,12 +33,12 @@ client = MongoClient(MONGO_URL)
 db = client["telegram_bot"]
 collection = db["files"]
 
-# -------- Flask --------
+# -------- Flask (Keep Alive) --------
 app_web = Flask(__name__)
 
 @app_web.route('/')
 def home():
-    return "Bot running"
+    return "Bot is running"
 
 def run_web():
     app_web.run(host='0.0.0.0', port=PORT)
@@ -44,14 +52,17 @@ async def delete_later(bot, chat_id, message_id):
     await asyncio.sleep(300)
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        logger.info(f"Successfully deleted message {message_id}")
     except BadRequest:
         pass
     except Exception as e:
-        print(e)
+        logger.error(f"Delete error: {e}")
 
 # -------- Save File --------
 async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+    if not msg: return
+
     file_id = None
     file_type = None
 
@@ -78,17 +89,16 @@ async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_info = await context.bot.get_me()
     link = f"https://t.me/{bot_info.username}?start={code}"
 
-    await msg.reply_text(f"🔗 Link:\n{link}")
+    await msg.reply_text(f"🔗 Your link:\n{link}")
 
-# -------- Start --------
+# -------- Start Command --------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         code = context.args[0]
-
         data = collection.find_one({"code": code})
 
         if not data:
-            await update.message.reply_text("❌ Invalid link")
+            await update.message.reply_text("❌ Invalid or expired link")
             return
 
         file_id = data["file_id"]
@@ -103,26 +113,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sent = await context.bot.send_video(update.effective_chat.id, file_id)
             else:
                 sent = await context.bot.send_document(update.effective_chat.id, file_id)
+            
+            # Typo fixed here (sent, not sant)
+            asyncio.create_task(
+                delete_later(context.bot, update.effective_chat.id, sent.message_id)
+            )
+
         except Exception as e:
-            print(e)
+            logger.error(f"Send error: {e}")
             await update.message.reply_text("❌ Failed to send file")
-            return
-
-        asyncio.create_task(
-            delete_later(context.bot, update.effective_chat.id, sent.message_id)
-        )
-
     else:
         await update.message.reply_text("👋 Send me a file to get link")
 
 # -------- Main --------
 def main():
-    if not BOT_TOKEN:
-        print("BOT_TOKEN missing")
-        return
-
-    if not MONGO_URL:
-        print("MONGO_URL missing")
+    if not BOT_TOKEN or not MONGO_URL:
+        logger.error("Environment variables BOT_TOKEN or MONGO_URL are missing!")
         return
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -133,10 +139,12 @@ def main():
         save_file
     ))
 
+    # Keep alive thread
     Thread(target=run_web, daemon=True).start()
 
-    print("Bot started...")
-    app.run_polling()
+    logger.info("Bot started successfully...")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
+    
