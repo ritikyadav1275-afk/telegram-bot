@@ -5,7 +5,7 @@ import asyncio
 from flask import Flask
 from threading import Thread
 
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -27,7 +27,7 @@ client = MongoClient(MONGO_URL)
 db = client["telegram_bot"]
 collection = db["files"]
 
-# ================== WEB (Render fix) ==================
+# ================== WEB ==================
 app_web = Flask(__name__)
 
 @app_web.route('/')
@@ -41,17 +41,40 @@ def run_web():
 def gen_code():
     return ''.join(random.choices(string.ascii_letters + string.digits, k=8))
 
+# ================== DELETE ==================
+async def delete_later(bot, chat_id, message_id):
+    await asyncio.sleep(300)
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except:
+        pass
+
 # ================== START ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         code = context.args[0]
-
         data = collection.find_one({"code": code})
 
         if not data:
             await update.message.reply_text("❌ Invalid link")
             return
 
+        # Batch
+        if "batch" in data:
+            await update.message.reply_text("⏳ Files will delete in 5 minutes")
+
+            for file_id, file_type in data["batch"]:
+                if file_type == "photo":
+                    sent = await context.bot.send_photo(update.effective_chat.id, file_id)
+                elif file_type == "video":
+                    sent = await context.bot.send_video(update.effective_chat.id, file_id)
+                else:
+                    sent = await context.bot.send_document(update.effective_chat.id, file_id)
+
+                asyncio.create_task(delete_later(context.bot, update.effective_chat.id, sent.message_id))
+            return
+
+        # Single file
         file_id = data["file_id"]
         file_type = data["type"]
 
@@ -67,15 +90,40 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(delete_later(context.bot, update.effective_chat.id, sent.message_id))
 
     else:
-        await update.message.reply_text("👋 Send a file to get a link!")
+        keyboard = [
+            ["📤 Upload File"],
+            ["📦 Batch Mode"],
+            ["ℹ️ Help"]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# ================== DELETE ==================
-async def delete_later(bot, chat_id, message_id):
-    await asyncio.sleep(300)
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except:
-        pass
+        await update.message.reply_text(
+            "👋 Welcome!\nChoose an option:",
+            reply_markup=reply_markup
+        )
+
+# ================== MENU ==================
+user_batch = {}
+
+async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+
+    if text == "📤 Upload File":
+        await update.message.reply_text("📁 Send me any file")
+
+    elif text == "📦 Batch Mode":
+        if update.effective_user.id != ADMIN_ID:
+            return
+        user_batch[update.effective_user.id] = []
+        await update.message.reply_text("📥 Send files then type /done")
+
+    elif text == "ℹ️ Help":
+        await update.message.reply_text(
+            "📌 How to use:\n\n"
+            "1. Send file → get link\n"
+            "2. Batch Mode → multiple files\n"
+            "3. Files auto delete in 5 minutes"
+        )
 
 # ================== SAVE FILE ==================
 async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -106,16 +154,7 @@ async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await msg.reply_text(f"✅ Saved!\n🔗 Link:\n{link}")
 
-# ================== BATCH SYSTEM ==================
-user_batch = {}
-
-async def batch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    user_batch[update.effective_user.id] = []
-    await update.message.reply_text("📥 Send files then type /done")
-
+# ================== BATCH ==================
 async def collect_batch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in user_batch:
         return
@@ -160,34 +199,14 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"🔗 Batch Link:\n{link}")
 
-# ================== HANDLE BATCH LINK ==================
-async def handle_batch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    code = context.args[0]
-    data = collection.find_one({"code": code})
-
-    if not data or "batch" not in data:
-        return
-
-    await update.message.reply_text("⏳ Files will delete in 5 minutes")
-
-    for file_id, file_type in data["batch"]:
-        if file_type == "photo":
-            sent = await context.bot.send_photo(update.effective_chat.id, file_id)
-        elif file_type == "video":
-            sent = await context.bot.send_video(update.effective_chat.id, file_id)
-        else:
-            sent = await context.bot.send_document(update.effective_chat.id, file_id)
-
-        asyncio.create_task(delete_later(context.bot, update.effective_chat.id, sent.message_id))
-
 # ================== MAIN ==================
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("batch", batch))
     app.add_handler(CommandHandler("done", done))
 
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler))
     app.add_handler(MessageHandler(filters.ALL, collect_batch))
     app.add_handler(MessageHandler(
         filters.PHOTO | filters.VIDEO | filters.Document.ALL,
@@ -197,7 +216,7 @@ def main():
     Thread(target=run_web, daemon=True).start()
 
     print("Bot started...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
