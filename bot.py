@@ -3,6 +3,7 @@ import asyncio
 import logging
 import random
 import string
+import requests
 from flask import Flask
 from threading import Thread
 
@@ -26,6 +27,9 @@ MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = 947542421
 FORCE_CHANNEL = "@Allmyfaul"
 
+# 💰 SHORTENER API
+SHORTENER_API = "1b1f76293dbbf0c942d52b625"
+
 client = MongoClient(MONGO_URL)
 db = client["telegram_bot"]
 files = db["files"]
@@ -43,6 +47,18 @@ def run_web():
 
 def gen_code():
     return ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+
+# ---------- SHORTENER ----------
+def shorten_link(url):
+    try:
+        api_url = f"https://shrinkme.io/api?api={SHORTENER_API}&url={url}"
+        res = requests.get(api_url).json()
+
+        if res.get("status") == "success":
+            return res.get("shortenedUrl")
+        return url
+    except:
+        return url
 
 # ---------- FORCE JOIN ----------
 async def check_join(update, context):
@@ -108,7 +124,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("ℹ️ Help", callback_data="help")]
     ]
 
-    await update.message.reply_text("👋 Welcome!", reply_markup=InlineKeyboardMarkup(keyboard))
+    if user_id == ADMIN_ID:
+        keyboard.append([InlineKeyboardButton("👑 Admin Panel", callback_data="admin_panel")])
+
+    await update.message.reply_text("🚀 Welcome!", reply_markup=InlineKeyboardMarkup(keyboard))
 
 # ---------- SAVE FILE ----------
 async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -131,67 +150,45 @@ async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     files.insert_one({"code": code, "file_id": file_id, "type": ftype})
 
     bot = await context.bot.get_me()
-    link = f"https://t.me/{bot.username}?start={code}"
+    original_link = f"https://t.me/{bot.username}?start={code}"
 
-    await msg.reply_text(f"✅ Link:\n{link}")
+    # 💰 SHORTENED LINK
+    short_link = shorten_link(original_link)
 
-# ---------- BATCH ----------
-batch_mode = {}
+    await msg.reply_text(f"💰 Download Link:\n{short_link}")
 
-async def batch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    batch_mode[update.effective_user.id] = []
-    await update.message.reply_text("📦 Send files then type /done")
-
-async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-
-    if user_id not in batch_mode or not batch_mode[user_id]:
-        await update.message.reply_text("❌ No files")
-        return
-
-    code = gen_code()
-
-    files.insert_one({
-        "code": code,
-        "batch": batch_mode[user_id]
-    })
-
-    del batch_mode[user_id]
-
-    bot = await context.bot.get_me()
-    link = f"https://t.me/{bot.username}?start={code}"
-
-    await update.message.reply_text(f"📦 Batch Link:\n{link}")
-
-# ---------- HANDLE FILE IN BATCH ----------
-async def handle_batch_files(update, context):
-    user_id = update.effective_user.id
-
-    if user_id not in batch_mode:
-        return
-
-    msg = update.message
-
-    if msg.photo:
-        batch_mode[user_id].append(("photo", msg.photo[-1].file_id))
-    elif msg.video:
-        batch_mode[user_id].append(("video", msg.video.file_id))
-    elif msg.document:
-        batch_mode[user_id].append(("document", msg.document.file_id))
-
-# ---------- CALLBACK ----------
+# ---------- CALLBACK BUTTONS ----------
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "upload":
-        await query.message.reply_text("📤 Send file")
-    elif query.data == "batch":
-        await batch(update, context)
-    elif query.data == "help":
-        await query.message.reply_text("Send file to get link")
+    uid = query.from_user.id
 
-# ---------- JOIN BUTTON ----------
+    if query.data == "upload":
+        await query.edit_message_text("📤 Send file")
+
+    elif query.data == "batch":
+        await query.edit_message_text("📦 Send files (basic batch)")
+
+    elif query.data == "help":
+        await query.edit_message_text("Send file → get link → earn 💰")
+
+    elif query.data == "admin_panel" and uid == ADMIN_ID:
+        keyboard = [
+            [InlineKeyboardButton("📊 Users", callback_data="users")],
+            [InlineKeyboardButton("📢 Broadcast", callback_data="broadcast")]
+        ]
+        await query.edit_message_text("👑 Admin Panel", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif query.data == "users":
+        total = users.count_documents({})
+        await query.edit_message_text(f"👥 Users: {total}")
+
+    elif query.data == "broadcast":
+        context.user_data["broadcast"] = True
+        await query.edit_message_text("Send message")
+
+# ---------- JOIN CHECK ----------
 async def join_check(update, context):
     query = update.callback_query
     await query.answer()
@@ -202,15 +199,7 @@ async def join_check(update, context):
     else:
         await query.answer("❌ Join first", show_alert=True)
 
-# ---------- ADMIN ----------
-async def broadcast(update, context):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    await update.message.reply_text("Send message")
-
-    context.user_data["broadcast"] = True
-
+# ---------- BROADCAST ----------
 async def handle_broadcast(update, context):
     if not context.user_data.get("broadcast"):
         return
@@ -226,48 +215,19 @@ async def handle_broadcast(update, context):
     context.user_data["broadcast"] = False
     await update.message.reply_text(f"Sent {count}")
 
-async def stats(update, context):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    total = users.count_documents({})
-    await update.message.reply_text(f"👥 Users: {total}")
-
-async def ban(update, context):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    uid = int(context.args[0])
-    banned.insert_one({"user_id": uid})
-    await update.message.reply_text("Banned")
-
-async def unban(update, context):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    uid = int(context.args[0])
-    banned.delete_one({"user_id": uid})
-    await update.message.reply_text("Unbanned")
-
 # ---------- MAIN ----------
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("done", done))
-    app.add_handler(CommandHandler("broadcast", broadcast))
-    app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CommandHandler("ban", ban))
-    app.add_handler(CommandHandler("unban", unban))
-
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(CallbackQueryHandler(join_check, pattern="check_join"))
-
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_broadcast))
-    app.add_handler(MessageHandler(filters.ALL, handle_batch_files))
     app.add_handler(MessageHandler(filters.ALL, save_file))
 
     Thread(target=run_web, daemon=True).start()
+
+    print("🚀 Bot Started")
     app.run_polling()
 
 if __name__ == "__main__":
