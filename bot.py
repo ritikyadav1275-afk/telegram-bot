@@ -27,7 +27,6 @@ MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = 947542421
 FORCE_CHANNEL = "@Allmyfaul"
 
-# 💰 SHORTENER API
 SHORTENER_API = "1b1f76293dbbf0c942d52b625"
 
 client = MongoClient(MONGO_URL)
@@ -53,7 +52,6 @@ def shorten_link(url):
     try:
         api_url = f"https://shrinkme.io/api?api={SHORTENER_API}&url={url}"
         res = requests.get(api_url).json()
-
         if res.get("status") == "success":
             return res.get("shortenedUrl")
         return url
@@ -87,7 +85,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not users.find_one({"user_id": user_id}):
         users.insert_one({"user_id": user_id})
 
-    # FORCE JOIN
     if not await check_join(update, context):
         keyboard = [
             [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{FORCE_CHANNEL.replace('@','')}")],
@@ -96,7 +93,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 Join channel first", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # LINK OPEN
     if context.args:
         code = context.args[0]
         data = files.find_one({"code": code})
@@ -117,17 +113,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(delete_later(context.bot, update.effective_chat.id, sent.message_id))
         return
 
-    # MENU
     keyboard = [
-        [InlineKeyboardButton("📤 Upload", callback_data="upload")],
-        [InlineKeyboardButton("📦 Batch", callback_data="batch")],
+        [InlineKeyboardButton("📤 Upload File", callback_data="upload")],
+        [InlineKeyboardButton("📦 Batch Mode", callback_data="batch")],
         [InlineKeyboardButton("ℹ️ Help", callback_data="help")]
     ]
 
     if user_id == ADMIN_ID:
         keyboard.append([InlineKeyboardButton("👑 Admin Panel", callback_data="admin_panel")])
 
-    await update.message.reply_text("🚀 Welcome!", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(
+        "🚀 Welcome!\nChoose an option:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 # ---------- SAVE FILE ----------
 async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -146,47 +144,48 @@ async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     code = gen_code()
-
     files.insert_one({"code": code, "file_id": file_id, "type": ftype})
 
     bot = await context.bot.get_me()
     original_link = f"https://t.me/{bot.username}?start={code}"
-
-    # 💰 SHORTENED LINK
     short_link = shorten_link(original_link)
 
     await msg.reply_text(f"💰 Download Link:\n{short_link}")
 
-# ---------- CALLBACK BUTTONS ----------
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------- BUTTONS ----------
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     uid = query.from_user.id
 
     if query.data == "upload":
-        await query.edit_message_text("📤 Send file")
+        await query.edit_message_text("📤 Send a file")
 
     elif query.data == "batch":
-        await query.edit_message_text("📦 Send files (basic batch)")
+        await query.edit_message_text("📦 Send multiple files then /done")
 
     elif query.data == "help":
-        await query.edit_message_text("Send file → get link → earn 💰")
+        await query.edit_message_text("ℹ️ Send file to get link & earn 💰")
 
     elif query.data == "admin_panel" and uid == ADMIN_ID:
         keyboard = [
             [InlineKeyboardButton("📊 Users", callback_data="users")],
-            [InlineKeyboardButton("📢 Broadcast", callback_data="broadcast")]
+            [InlineKeyboardButton("📢 Broadcast", callback_data="broadcast")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="back")]
         ]
         await query.edit_message_text("👑 Admin Panel", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif query.data == "users":
         total = users.count_documents({})
-        await query.edit_message_text(f"👥 Users: {total}")
+        await query.edit_message_text(f"👥 Total Users: {total}")
 
     elif query.data == "broadcast":
         context.user_data["broadcast"] = True
-        await query.edit_message_text("Send message")
+        await query.edit_message_text("Send message to broadcast")
+
+    elif query.data == "back":
+        await start(update, context)
 
 # ---------- JOIN CHECK ----------
 async def join_check(update, context):
@@ -213,21 +212,21 @@ async def handle_broadcast(update, context):
             pass
 
     context.user_data["broadcast"] = False
-    await update.message.reply_text(f"Sent {count}")
+    await update.message.reply_text(f"✅ Sent to {count} users")
 
 # ---------- MAIN ----------
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(CallbackQueryHandler(buttons))
     app.add_handler(CallbackQueryHandler(join_check, pattern="check_join"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_broadcast))
     app.add_handler(MessageHandler(filters.ALL, save_file))
 
     Thread(target=run_web, daemon=True).start()
 
-    print("🚀 Bot Started")
+    print("🚀 Bot Running")
     app.run_polling()
 
 if __name__ == "__main__":
