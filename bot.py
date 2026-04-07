@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.INFO)
 # ---------- ENV ----------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
-ADMIN_ID = 947542421  # 👈 YOUR ADMIN ID
+ADMIN_ID = 947542421  # your id
 
 # ---------- DB ----------
 client = MongoClient(MONGO_URL)
@@ -45,7 +45,15 @@ def run_web():
 def gen_code():
     return ''.join(random.choices(string.ascii_letters + string.digits, k=8))
 
-# ---------- START ----------
+# ---------- AUTO DELETE ----------
+async def delete_later(bot, chat_id, message_id):
+    await asyncio.sleep(300)
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except:
+        pass
+
+# ---------- START (MERGED) ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -53,6 +61,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not users.find_one({"user_id": user_id}):
         users.insert_one({"user_id": user_id})
 
+    # 👉 LINK OPEN
+    if context.args:
+        code = context.args[0]
+
+        data = files.find_one({"code": code})
+
+        if not data:
+            await update.message.reply_text("❌ Invalid link")
+            return
+
+        file_id = data["file_id"]
+        file_type = data["type"]
+
+        await update.message.reply_text("⏳ File will delete in 5 minutes")
+
+        if file_type == "photo":
+            sent = await context.bot.send_photo(update.effective_chat.id, file_id)
+        elif file_type == "video":
+            sent = await context.bot.send_video(update.effective_chat.id, file_id)
+        else:
+            sent = await context.bot.send_document(update.effective_chat.id, file_id)
+
+        asyncio.create_task(delete_later(context.bot, update.effective_chat.id, sent.message_id))
+        return
+
+    # 👉 NORMAL MENU
     keyboard = [
         [InlineKeyboardButton("📤 Upload File", callback_data="upload")],
         [InlineKeyboardButton("📦 Batch Mode", callback_data="batch")],
@@ -96,41 +130,6 @@ async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await msg.reply_text(f"✅ Saved!\n🔗 Link:\n{link}")
 
-# ---------- GET FILE ----------
-async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        return
-
-    code = context.args[0]
-
-    data = files.find_one({"code": code})
-
-    if not data:
-        await update.message.reply_text("❌ Invalid link")
-        return
-
-    file_id = data["file_id"]
-    file_type = data["type"]
-
-    await update.message.reply_text("⏳ File will delete in 5 minutes")
-
-    if file_type == "photo":
-        sent = await context.bot.send_photo(update.effective_chat.id, file_id)
-    elif file_type == "video":
-        sent = await context.bot.send_video(update.effective_chat.id, file_id)
-    else:
-        sent = await context.bot.send_document(update.effective_chat.id, file_id)
-
-    asyncio.create_task(delete_later(context.bot, update.effective_chat.id, sent.message_id))
-
-# ---------- AUTO DELETE ----------
-async def delete_later(bot, chat_id, message_id):
-    await asyncio.sleep(300)
-    try:
-        await bot.delete_message(chat_id, message_id)
-    except:
-        pass
-
 # ---------- BROADCAST ----------
 broadcast_mode = {}
 
@@ -148,7 +147,6 @@ async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     all_users = users.find()
-
     count = 0
 
     for user in all_users:
@@ -170,7 +168,7 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # ORDER IS IMPORTANT
+    # ✅ CORRECT ORDER
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_broadcast))
@@ -178,12 +176,11 @@ def main():
         filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
         save_file
     ))
-    app.add_handler(CommandHandler("start", get_file))  # for links
 
     Thread(target=run_web, daemon=True).start()
 
     print("🚀 Bot Started")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
