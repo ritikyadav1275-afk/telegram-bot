@@ -1,171 +1,75 @@
 import os
+import asyncio
+import logging
 import random
 import string
-import asyncio
 from flask import Flask
 from threading import Thread
 
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
-    filters,
-    ContextTypes
+    ContextTypes,
+    filters
 )
+
 from pymongo import MongoClient
 
-# ================= CONFIG =================
+# ---------- LOGGING ----------
+logging.basicConfig(level=logging.INFO)
+
+# ---------- ENV ----------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
-PORT = int(os.environ.get("PORT", 10000))
+ADMIN_ID = 947542421  # 👈 YOUR ADMIN ID
 
-ADMIN_ID = 947542421
-CHANNEL_USERNAME = "@Allmyfaul"
-
-# ================= DATABASE =================
+# ---------- DB ----------
 client = MongoClient(MONGO_URL)
 db = client["telegram_bot"]
-collection = db["files"]
+files = db["files"]
+users = db["users"]
 
-# ================= WEB =================
+# ---------- FLASK ----------
 app_web = Flask(__name__)
 
 @app_web.route('/')
 def home():
-    return "Bot is running!"
+    return "Bot Running"
 
 def run_web():
-    app_web.run(host='0.0.0.0', port=PORT)
+    app_web.run(host="0.0.0.0", port=10000)
 
-# ================= UTIL =================
+# ---------- UTILS ----------
 def gen_code():
     return ''.join(random.choices(string.ascii_letters + string.digits, k=8))
 
-# ================= FORCE JOIN =================
-async def check_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    try:
-        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except:
-        return False
-
-# ================= DELETE =================
-async def delete_later(bot, chat_id, message_id):
-    await asyncio.sleep(300)
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except:
-        pass
-
-# ================= START =================
+# ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
 
-    # 🔥 FORCE JOIN CHECK
-    if not await check_join(update, context):
-        keyboard = [
-            [InlineKeyboardButton("📢 Join Channel", url="https://t.me/Allmyfaul")],
-            [InlineKeyboardButton("✅ Try Again", callback_data="check_join")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+    # save user
+    if not users.find_one({"user_id": user_id}):
+        users.insert_one({"user_id": user_id})
 
-        await update.message.reply_text(
-            "🚫 You must join our channel first!",
-            reply_markup=reply_markup
-        )
-        return
+    keyboard = [
+        [InlineKeyboardButton("📤 Upload File", callback_data="upload")],
+        [InlineKeyboardButton("📦 Batch Mode", callback_data="batch")],
+        [InlineKeyboardButton("ℹ️ Help", callback_data="help")]
+    ]
 
-    # 🔗 LINK ACCESS
-    if context.args:
-        code = context.args[0]
-        data = collection.find_one({"code": code})
+    await update.message.reply_text(
+        "👋 Welcome!\nChoose an option:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-        if not data:
-            await update.message.reply_text("❌ Invalid link")
-            return
-
-        await update.message.reply_text("⏳ Files will delete in 5 minutes")
-
-        if "batch" in data:
-            for file_id, file_type in data["batch"]:
-                if file_type == "photo":
-                    sent = await context.bot.send_photo(update.effective_chat.id, file_id)
-                elif file_type == "video":
-                    sent = await context.bot.send_video(update.effective_chat.id, file_id)
-                else:
-                    sent = await context.bot.send_document(update.effective_chat.id, file_id)
-
-                asyncio.create_task(delete_later(context.bot, update.effective_chat.id, sent.message_id))
-        else:
-            file_id = data["file_id"]
-            file_type = data["type"]
-
-            if file_type == "photo":
-                sent = await context.bot.send_photo(update.effective_chat.id, file_id)
-            elif file_type == "video":
-                sent = await context.bot.send_video(update.effective_chat.id, file_id)
-            else:
-                sent = await context.bot.send_document(update.effective_chat.id, file_id)
-
-            asyncio.create_task(delete_later(context.bot, update.effective_chat.id, sent.message_id))
-
-    else:
-        keyboard = [
-            ["📤 Upload File"],
-            ["📦 Batch Mode"],
-            ["ℹ️ Help"]
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-        await update.message.reply_text(
-            "👋 Welcome!\nChoose an option:",
-            reply_markup=reply_markup
-        )
-
-# ================= RETRY BUTTON =================
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "check_join":
-        if await check_join(update, context):
-            await query.edit_message_text("✅ You joined! Send /start again")
-        else:
-            await query.answer("❌ Still not joined!", show_alert=True)
-
-# ================= MENU =================
-user_batch = {}
-
-async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-
-    if text == "📤 Upload File":
-        await update.message.reply_text("📁 Send me any file")
-
-    elif text == "📦 Batch Mode":
-        if update.effective_user.id != ADMIN_ID:
-            return
-        user_batch[update.effective_user.id] = []
-        await update.message.reply_text("📥 Send files then type /done")
-
-    elif text == "ℹ️ Help":
-        await update.message.reply_text(
-            "📌 How to use:\n\n"
-            "1. Send file → get link\n"
-            "2. Batch Mode → multiple files\n"
-            "3. Files auto delete in 5 minutes"
-        )
-
-# ================= SAVE FILE =================
+# ---------- SAVE FILE ----------
 async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+
+    file_id = None
+    file_type = None
 
     if msg.photo:
         file_id = msg.photo[-1].file_id
@@ -181,7 +85,7 @@ async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     code = gen_code()
 
-    collection.insert_one({
+    files.insert_one({
         "code": code,
         "file_id": file_id,
         "type": file_type
@@ -192,70 +96,94 @@ async def save_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await msg.reply_text(f"✅ Saved!\n🔗 Link:\n{link}")
 
-# ================= BATCH =================
-async def collect_batch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in user_batch:
+# ---------- GET FILE ----------
+async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
         return
 
-    msg = update.message
+    code = context.args[0]
 
-    if msg.photo:
-        file_id = msg.photo[-1].file_id
-        file_type = "photo"
-    elif msg.video:
-        file_id = msg.video.file_id
-        file_type = "video"
-    elif msg.document:
-        file_id = msg.document.file_id
-        file_type = "document"
+    data = files.find_one({"code": code})
+
+    if not data:
+        await update.message.reply_text("❌ Invalid link")
+        return
+
+    file_id = data["file_id"]
+    file_type = data["type"]
+
+    await update.message.reply_text("⏳ File will delete in 5 minutes")
+
+    if file_type == "photo":
+        sent = await context.bot.send_photo(update.effective_chat.id, file_id)
+    elif file_type == "video":
+        sent = await context.bot.send_video(update.effective_chat.id, file_id)
     else:
-        return
+        sent = await context.bot.send_document(update.effective_chat.id, file_id)
 
-    user_batch[update.effective_user.id].append((file_id, file_type))
+    asyncio.create_task(delete_later(context.bot, update.effective_chat.id, sent.message_id))
 
-async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------- AUTO DELETE ----------
+async def delete_later(bot, chat_id, message_id):
+    await asyncio.sleep(300)
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except:
+        pass
+
+# ---------- BROADCAST ----------
+broadcast_mode = {}
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    files = user_batch.get(update.effective_user.id)
+    broadcast_mode[update.effective_user.id] = True
+    await update.message.reply_text("📢 Send message to broadcast")
 
-    if not files:
-        await update.message.reply_text("❌ No files")
+async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if user_id not in broadcast_mode:
         return
 
-    code = gen_code()
+    all_users = users.find()
 
-    collection.insert_one({
-        "code": code,
-        "batch": files
-    })
+    count = 0
 
-    del user_batch[update.effective_user.id]
+    for user in all_users:
+        try:
+            await context.bot.send_message(user["user_id"], update.message.text)
+            count += 1
+        except:
+            pass
 
-    bot_info = await context.bot.get_me()
-    link = f"https://t.me/{bot_info.username}?start={code}"
+    broadcast_mode.pop(user_id)
 
-    await update.message.reply_text(f"🔗 Batch Link:\n{link}")
+    await update.message.reply_text(f"✅ Sent to {count} users")
 
-# ================= MAIN =================
+# ---------- MAIN ----------
 def main():
+    if not BOT_TOKEN or not MONGO_URL:
+        print("Missing ENV")
+        return
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # ORDER IS IMPORTANT
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("done", done))
-    app.add_handler(CallbackQueryHandler(button_handler))
-
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler))
-    app.add_handler(MessageHandler(filters.ALL, collect_batch))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_broadcast))
     app.add_handler(MessageHandler(
-        filters.PHOTO | filters.VIDEO | filters.Document.ALL,
+        filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
         save_file
     ))
+    app.add_handler(CommandHandler("start", get_file))  # for links
 
     Thread(target=run_web, daemon=True).start()
 
-    print("Bot started...")
-    app.run_polling(drop_pending_updates=True)
+    print("🚀 Bot Started")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
