@@ -1,6 +1,2 @@
-python-telegram-bot
-flask
-pymongo[srv]
-httpx
-dnspython
+python-telegram-bot==20.8
 requests
