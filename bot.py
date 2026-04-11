@@ -11,7 +11,7 @@ from telegram.ext import (
     filters
 )
 
-TOKEN = "YOUR_BOT_TOKEN"
+TOKEN = "8776336091:AAGgrJn6bUaPJbo2QsPkM62irHFGfGpCFNk"
 SHORTENER_API = "YOUR_API_KEY"
 
 logging.basicConfig(level=logging.INFO)
