@@ -2,16 +2,23 @@ import logging
 import requests
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters
+)
 
-TOKEN = "8776336091:AAGgrJn6bUaPJbo2QsPkM62irHFGfGpCFNk"
+TOKEN = "YOUR_BOT_TOKEN"
 SHORTENER_API = "YOUR_API_KEY"
 
 logging.basicConfig(level=logging.INFO)
 
 user_files = {}
 
-# 🔗 Shortener (safe)
+# 🔗 Safe Shortener
 def shorten_url(url):
     try:
         api_url = f"https://shrinkme.io/api?api={SHORTENER_API}&url={url}"
@@ -23,7 +30,7 @@ def shorten_url(url):
     except:
         return url
 
-# 🚀 Start command
+# 🚀 Start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
 
@@ -31,16 +38,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if args:
         file_id = args[0]
         if file_id in user_files:
-            msg = user_files[file_id]
-            sent = await update.message.reply_document(msg)
+            sent = await update.message.reply_document(user_files[file_id])
 
-            # ⏳ Auto delete after 5 min
             await asyncio.sleep(300)
             await sent.delete()
             await update.message.reply_text("⏳ File deleted!")
         return
 
-    # Main menu
     keyboard = [
         [InlineKeyboardButton("📤 Upload File", callback_data="upload")],
         [InlineKeyboardButton("📦 Batch Mode", callback_data="batch")],
@@ -72,7 +76,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Saved!\n💰 Download Link:\n{short_link}"
     )
 
-# 🧾 Button handler
+# 🔘 Buttons
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -84,15 +88,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("📦 Batch mode coming soon")
 
     elif query.data == "help":
-        await query.message.reply_text("ℹ️ Send any file to get a download link")
+        await query.message.reply_text("ℹ️ Send any file to get link")
 
-# ▶️ Run bot
+# ▶️ Run
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-app.add_handler(MessageHandler(filters.ALL, lambda u, c: None))
-app.add_handler(telegram.ext.CallbackQueryHandler(button_handler))
+app.add_handler(CallbackQueryHandler(button_handler))
 
 print("🚀 Bot running...")
 app.run_polling()
