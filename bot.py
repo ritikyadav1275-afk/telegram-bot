@@ -18,7 +18,6 @@ logging.basicConfig(level=logging.INFO)
 
 user_files = {}
 
-# 🔗 Safe Shortener
 def shorten_url(url):
     try:
         api_url = f"https://shrinkme.io/api?api={SHORTENER_API}&url={url}"
@@ -30,16 +29,13 @@ def shorten_url(url):
     except:
         return url
 
-# 🚀 Start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
 
-    # If link opened
     if args:
         file_id = args[0]
         if file_id in user_files:
             sent = await update.message.reply_document(user_files[file_id])
-
             await asyncio.sleep(300)
             await sent.delete()
             await update.message.reply_text("⏳ File deleted!")
@@ -56,27 +52,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# 📤 Handle file
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = update.message.document
 
     if not file:
-        await update.message.reply_text("❌ Send a valid file")
+        await update.message.reply_text("❌ Send a file")
         return
 
     file_id = file.file_id
     user_files[file_id] = file_id
 
     bot_username = (await context.bot.get_me()).username
-    deep_link = f"https://t.me/{bot_username}?start={file_id}"
+    link = f"https://t.me/{bot_username}?start={file_id}"
 
-    short_link = shorten_url(deep_link)
+    short = shorten_url(link)
 
-    await update.message.reply_text(
-        f"✅ Saved!\n💰 Download Link:\n{short_link}"
-    )
+    await update.message.reply_text(f"✅ Saved!\n💰 Link:\n{short}")
 
-# 🔘 Buttons
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -85,17 +77,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("📤 Send your file now")
 
     elif query.data == "batch":
-        await query.message.reply_text("📦 Batch mode coming soon")
+        await query.message.reply_text("📦 Coming soon")
 
     elif query.data == "help":
-        await query.message.reply_text("ℹ️ Send any file to get link")
+        await query.message.reply_text("ℹ️ Just send file to get link")
 
-# ▶️ Run
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 app.add_handler(CallbackQueryHandler(button_handler))
 
-print("🚀 Bot running...")
+print("🚀 Running...")
 app.run_polling()
